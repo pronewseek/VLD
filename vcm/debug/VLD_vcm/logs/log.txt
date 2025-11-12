@@ -1,0 +1,5 @@
+
+
+
+
+Namespace(cuda='cuda', mode='test', dataset='vcm', vcm_data_path='/data2/Datasets/CMReID/HITSZ-VCM', bupt_data_path='/data2/Datasets/CMReID/BUPTCampus', batch_size=4, num_pos=4, is_STA=True, img_w=144, img_h=288, test_batch=32, seed=1, pid_num=1074, steps=200, learning_rate=2.5e-05, lr_times=25, num_workers=8, weight_decay=0.0001, output_path='vcm/debug/VLD_vcm', total_train_epoch=24, eval_epoch=2, resume_test_path='/data/Zhongping/project/VLD/vcm/debug/VLD_vcm/models', STH_start_layer=9, train_frame_sample='random', sequence_length=6, random_flip=True, fake=False, test_frame_sample='uniform', test_sampler='ConsistentModalitySampler', test_bs=64, train_sampler='RandomIdentitySampler', train_bs=16, train_sampler_nc=2, train_sampler_nt=1, max_rank=20, weight_a=0.08, weight_b=0.4, weight_c=1.0)

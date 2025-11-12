@@ -4,6 +4,7 @@ import torch
 from torch.autograd import Variable
 from tools import eval_regdb, eval_sysu,evaluate_vcm,MODALITY_,evaluate_bupt
 import os
+import torch.nn as nn
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # def test(base, loader, config):
@@ -77,6 +78,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 #
 #     return all_cmc, all_mAP, all_mINP
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def process_vedio(x1,seq_len=6):
     b, c, h, w = x1.size()
@@ -105,7 +107,8 @@ def test_vcm(base, loader):
             batch_num = input.size(0)
             q_pids.extend(label)
             q_camids.extend(c_label)
-            input = Variable(input.cuda())
+            # input = Variable(input.cuda())
+            input = Variable(input.to(device))
             input = process_vedio(input)
             feat = base.model(x1=input)
             query = feat
@@ -127,11 +130,12 @@ def test_vcm(base, loader):
 
 
         with torch.no_grad():
-            for batch_idx, (input, label,c_label) in enumerate(gall_loader):
+            for batch_idx, (input, label,c_label) in enumerate(gall_loader): # label：行人ID标签； c_label：摄像头ID标签
                 batch_num = input.size(0)
                 g_pids.extend(label)
                 g_camids.extend(c_label)
-                input = Variable(input.cuda())
+                # input = Variable(input.cuda())
+                input = Variable(input.to(device))
                 input = process_vedio(input)
                 feat = base.model(x1=input)
                 gall = feat
@@ -191,7 +195,8 @@ def test_bupt(base, loader, config):
             q_pids.extend(label)
             q_camids.extend(c_label)
             q_modalitys.extend(modals)
-            input = Variable(input.cuda())
+            # input = Variable(input.cuda())
+            input = Variable(input.to(device))
             input = process_vedio(input)
             if modals[0]==0:
                 feat = base.model(x1=input)
@@ -226,7 +231,8 @@ def test_bupt(base, loader, config):
                 g_pids.extend(label)
                 g_camids.extend(c_label)
                 g_modalitys.extend(modals)
-                input = Variable(input.cuda())
+                # input = Variable(input.cuda())
+                input = Variable(input.to(device))
                 input = process_vedio(input)
                 if modals[0]==0:
                     feat = base.model(x1=input)

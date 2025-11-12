@@ -1,3 +1,8 @@
+# 在 main.py 的最开头（在所有 import 之前）加入：
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'mamba')))
+
+
 
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
@@ -11,12 +16,18 @@ from data_loader.loader import Loader
 from core import Base, train, test,test_vcm,test_bupt
 from tools import make_dirs, Logger, os_walk, time_now
 import warnings
+
+
 warnings.filterwarnings("ignore")
 
-import setproctitle
+# import setproctitle
+#
+# # 设置进程名
+# setproctitle.setproctitle("李爽")
 
-# 设置进程名
-setproctitle.setproctitle("李爽")
+# 云开发机上跑要加这两行代码
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 best_mAP = 0
 best_rank1 = 0
@@ -92,8 +103,15 @@ if __name__ == '__main__':
     parser.add_argument('--cuda', type=str, default='cuda')
     parser.add_argument('--mode', type=str, default='test', help='train, test')
     parser.add_argument('--dataset', default='vcm', help='dataset name: vcm , bupt]')
-    parser.add_argument('--vcm_data_path', type=str, default='/data1/ls/data/HITSZ-VCM/')
-    parser.add_argument('--bupt_data_path', type=str, default='/data1/ls/data/BUPTCampus/')
+
+    # A800 数据集路径
+    parser.add_argument('--vcm_data_path', type=str, default='/mnt/cache/xlpr_sharedata/CMReID/HITSZ-VCM')
+    parser.add_argument('--bupt_data_path', type=str, default='/mnt/cache/xlpr_sharedata/CMReID/BUPTCampus')
+
+    # # A600 数据集路径
+    # parser.add_argument('--vcm_data_path', type=str, default='/data2/Datasets/CMReID/HITSZ-VCM/')
+    # parser.add_argument('--bupt_data_path', type=str, default='/data2/Datasets/CMReID/BUPTCampus/')
+
     parser.add_argument('--batch-size', default=4, type=int, metavar='B', help='training batch size')
     parser.add_argument('--num_pos', default=4, type=int,
                         help='num of pos per identity in each modality')
@@ -102,7 +120,7 @@ if __name__ == '__main__':
     parser.add_argument('--img_h', default=288, type=int, metavar='imgh', help='img height')
     parser.add_argument('--test_batch', type=int, default=32)
     parser.add_argument('--seed', type=int, default=1)
-    parser.add_argument('--pid_num', type=int, default=1074) #bupt 1074
+    parser.add_argument('--pid_num', type=int, default=500) # vcm 500 bupt 1074
     parser.add_argument('--steps', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.000025)
     parser.add_argument('--lr_times', type=int, default=25)
@@ -112,9 +130,15 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--output_path', type=str, default='vcm/debug/VLD_vcm',
                         help='path to save related informations')
-    parser.add_argument('--total_train_epoch', type=int, default=24)
+    parser.add_argument('--total_train_epoch', type=int, default=30)
     parser.add_argument('--eval_epoch', type=int, default=2)
-    parser.add_argument('--resume_test_path', type=str, default='/data1/ls/code/VIV_ReID/Github_vld/VLD/bupt/debug/VLD_vcm/models')
+
+    # A800
+    parser.add_argument('--resume_test_path', type=str, default='/mnt/cache/wujiahua/Zhongping/project/VLD/logs/vcm/models')
+
+    # # A600
+    # parser.add_argument('--resume_test_path', type=str, default='/data/Zhongping/project/VLD/logs/vcm/models/')
+
     parser.add_argument('--STH_start_layer', type=int, default=9, help='-1 for no resuming')
 
     ###bupt

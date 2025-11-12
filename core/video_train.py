@@ -31,17 +31,40 @@ def foward_video(iter,base,meter,scaler):
             ide_loss_text = base.pid_creiteron(cls_score[2], pids)
             ide_loss_cue = base.pid_creiteron(cls_score[3], pids)
 
+            # 添加
+            # loss_id2 = base.pid_creiteron(cls_score[5], pids)
+            # print(f'loss_id2: {loss_id2.data}')
+            # print(f'ide_loss: {ide_loss.data}')
+            # ide_loss += loss_id2
+            # print(f'ide_loss: {ide_loss.data}')
+
+
 
             triplet_loss_last = base.tri_creiteron(features[0].squeeze(), pids)
             triplet_loss = base.tri_creiteron(features[1].squeeze(), pids)
             triplet_loss_proj = base.tri_creiteron(features[2].squeeze(), pids)
             triplet_loss_cue = base.tri_creiteron(features[3].squeeze(), pids)
+
+            # print(f'pids_shape: {pids.shape}')
+            # print(f'features[0]_shape: {features[0].shape}')
+            # print(f'features[1]_shape: {features[1].shape}')
+
+            # # 添加
+            # feat_sp_loss_tri = base.tri_loss(features[4], pids)
+            # print(f'===> features[4]: {features[4].shape}')
+            # print(f'===> pids: {pids.shape}')
+            # print(f'===> feat_sp_loss_tri: {feat_sp_loss_tri.data}')
+
             ide_loss_text = base.weight_a*ide_loss_text
             ide_loss_cue = base.weight_b*ide_loss_cue
             triplet_loss_cue = base.weight_c*triplet_loss_cue
 
 
             total_loss = ide_loss + ide_loss_proj + triplet_loss_last + triplet_loss + triplet_loss_proj + ide_loss_text + ide_loss_cue + triplet_loss_cue
+            # total_loss = ide_loss + ide_loss_proj + triplet_loss_last + triplet_loss + triplet_loss_proj + ide_loss_text + ide_loss_cue + triplet_loss_cue + feat_sp_loss_tri
+            # print(f'===> total_loss: {total_loss.data}')
+            # total_loss = ide_loss + ide_loss_proj + triplet_loss_last + triplet_loss + triplet_loss_proj + ide_loss_text + ide_loss_cue + triplet_loss_cue + feat_sp_loss_tri
+            # print(f'===> total_loss + feat_sp_loss_tri: {total_loss.data}')
         scaler.scale(total_loss).backward()
         scaler.step(base.model_optimizer)
         scaler.update()
@@ -57,5 +80,6 @@ def foward_video(iter,base,meter,scaler):
                       'ide_loss_text': ide_loss_text.data,
                       'pid_loss_STP': ide_loss_cue.data,
                       'tri_loss_STP': triplet_loss_cue.data,
+                      # 'feat_sp_loss_tri': feat_sp_loss_tri.data,
                       })
     return meter

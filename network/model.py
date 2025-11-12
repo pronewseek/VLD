@@ -1,8 +1,21 @@
+# 在 main.py 的最开头（在所有 import 之前）加入：
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'mamba')))
+
+
 import torchvision
 import torch.nn as nn
 import torch
 import copy
 import numpy as np
+import torch.nn.functional as F
+
+
+from mamba.mamba_ssm.modules.bimamba import BiMamba
+from mamba.mamba_ssm.modules.mamba_simple import Mamba
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Normalize(nn.Module):
     def __init__(self, power=2):
@@ -70,7 +83,8 @@ class PromptLearner(nn.Module):
         ctx_dim = 512
         ctx_init = ctx_init.replace("_", " ")
 
-        tokenized_prompts = clip.tokenize(ctx_init).cuda()
+        # tokenized_prompts = clip.tokenize(ctx_init).cuda()
+        tokenized_prompts = clip.tokenize(ctx_init).to(device)
         with torch.no_grad():
             embedding = token_embedding(tokenized_prompts).type(dtype)
         self.tokenized_prompts = tokenized_prompts  # torch.Tensor
@@ -109,14 +123,15 @@ class Model(nn.Module):
     def __init__(self,config, num_classes, img_h, img_w):
         super(Model, self).__init__()
         self.config = config
-        self.in_planes = 2048
+        self.in_planes = 768
         self.num_classes = num_classes
 
         self.h_resolution = int((img_h - 16) // 16 + 1)
         self.w_resolution = int((img_w - 16) // 16 + 1)
         self.vision_stride_size = 16
         clip_model,model_dict = load_clip_to_cpu('ViT-B-16', self.h_resolution, self.w_resolution, self.vision_stride_size)
-        clip_model.to("cuda")
+        # clip_model.to("cuda")
+        clip_model.to(device)
         self.image_encoder = clip_model.visual
 
         self.classifier = Classifier(self.num_classes)
@@ -133,12 +148,33 @@ class Model(nn.Module):
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         self.seq_lenth = config.sequence_length
 
+        self.classifier3 = Classifier(self.num_classes)
         self.prompt_embedding = nn.Parameter(torch.randn(self.seq_lenth, self.seq_lenth, 768))
         self.is_STA = config.is_STA
         self.STH_start_layer = config.STH_start_layer
         self.head_num = 12
         self.attn = nn.MultiheadAttention(768, self.head_num)
         self.ln_post2 = copy.deepcopy(self.image_encoder.ln_post)
+
+
+        self.bottleneck_proj_sp = nn.BatchNorm1d(self.in_planes)
+        self.bottleneck_proj_sp.bias.requires_grad_(False)
+        self.bottleneck_proj_sp.apply(weights_init_kaiming)
+        self.sp_mamba_bi = nn.Sequential(
+            nn.LayerNorm(768),
+            BiMamba(
+                d_model=768,
+                d_state=16,
+                d_conv=4,
+                expand=2,
+            ),
+        )
+        self.norm2_mamba = nn.LayerNorm(768)
+        self.sp_attention = nn.Sequential(
+            nn.Linear(768, 192),
+            nn.Tanh(),
+            nn.Linear(192, 1)
+        )
 
     def encode_image(self, x: torch.Tensor, cv_emb=None):
         x = self.image_encoder.conv1(x)  # shape = [*, width, grid, grid]
@@ -211,30 +247,108 @@ class Model(nn.Module):
             hidden_states = hidden_states.reshape(-1, Ls + self.seq_lenth, hidden_states.size(-1))  # [bs * seq_len, L, dim]
             return hidden_states.permute(1, 0, 2)  # [L, bs * seq_len, dim]
 
+    def reorder(self, reference, raw):
 
+        # attention_map = attention_map.mean(axis=1)  # torch.Size([64, 50, 50])
+        reference_norm = F.normalize(reference, dim=-1).unsqueeze(1)  # bt, 1, 768
+        raw_norm = F.normalize(raw, dim=-1)  # bt, 128, 768
+        raw_norm = torch.transpose(raw_norm, 1, 2) # bt, 768, 128
+        sim = torch.bmm(reference_norm, raw_norm).squeeze(1)  # [bt, 1, 768] [bt, 768, 128]= [bt, 1, 128]
+
+        sorted, indices = torch.sort(sim, descending=True)
+
+        selected_patch_embedding = []
+        for i in range(indices.size(0)):   #bs
+          all_patch_embeddings_i = raw[i, :,:].squeeze()  # torch.Size([128, 768])
+          top_k_embedding = torch.index_select(all_patch_embeddings_i, 0, indices[i])  # torch.Size([128, 768])
+          top_k_embedding = top_k_embedding.unsqueeze(0)  # torch.Size([1, 128, 768])
+          selected_patch_embedding.append(top_k_embedding)
+        selected_patch_embedding = torch.cat(selected_patch_embedding, 0)  # torch.Size([64, 128, 768])
+
+        return selected_patch_embedding
 
     def forward(self, x1=None, x2=None):
         if x1 is not None and x2 is not None:
             image_features_maps = torch.cat([x1, x2], dim=0)
             image_features_last, image_features, image_features_proj,image_features_stp, image_features_proj_stp = self.encode_image(image_features_maps)
+            #
+            # print(f'image_features_last_shape: {image_features_last.shape}') # torch.Size([192, 169, 768])
+            # print(f'image_features_shape: {image_features.shape}') # torch.Size([192, 169, 768])
+            # print(f'image_features_proj_shape: {image_features_proj.shape}') # torch.Size([192, 169, 512])
+            # print(f'image_features_stp_shape: {image_features_stp.shape}') # torch.Size([192, 1, 768])
+            # print(f'image_features_proj_stp_shape: {image_features_proj_stp.shape}') # torch.Size([192, 1, 512])
 
-            img_feature_last = image_features_last[:,0]
-            img_feature = image_features[:,0]
-            img_feature_proj = image_features_proj[:,0]
-            image_features_stp, image_features_proj_stp = image_features_stp[:,0], image_features_proj_stp[:,0]
+            """
+                -----------------------测试开始-----------------------
+                    feats_for_mamba_shape: torch.Size([192, 169, 768])
+                    feats_for_mamba_sp_shape: torch.Size([192, 168, 768])
+                    feats_for_mamba_cls_shape: torch.Size([192, 768])
+                    re_order_mamba_sp_shape: torch.Size([192, 168, 768])
+                    
+                    mamba_sp_out_shape: torch.Size([192, 168, 768])
+                    mamba_sp_out_shape: torch.Size([192, 169, 768])
+                    mamba_sp_out2_shape: torch.Size([192, 169, 768])
+                    A_shape: torch.Size([192, 169, 1])
+                    A_shape: torch.Size([192, 1, 169])
+                    A_shape: torch.Size([192, 1, 169])
+                    mamba_sp_out2_shape: torch.Size([192, 1, 768])
+                    mamba_sp_out2_shape: torch.Size([192, 768])
+                    feat_sp_shape: torch.Size([192, 768])
+                    
+                    logit 代表 模型 对输入图像 所属身份类别的 预测分数
+                -----------------------测试结束-----------------------
+            """
 
-            img_feature_last = self.tem_pool(img_feature_last)
-            img_feature = self.tem_pool(img_feature)
-            img_feature_proj = self.tem_pool(img_feature_proj)
+            # # print('-----------------------测试开始-----------------------')
 
-            image_features_stp = self.tem_pool(image_features_stp)
-            image_features_proj_stp = self.tem_pool(image_features_proj_stp)
+            # feats_for_mamba = image_features.detach() # torch.Size([192, 169, 768])
+            # feats_for_mamba_sp = feats_for_mamba[:, 1:, :].detach() # torch.Size([192, 168, 768])
+            # feats_for_mamba_cls = feats_for_mamba[:, 0, :].detach() #  torch.Size([192, 768])
+            #
+            # #### reorder
+            # re_order_mamba_sp = self.reorder(feats_for_mamba_cls, feats_for_mamba_sp) # torch.Size([192, 168, 768])
+            #
+            # mamba_sp_out = self.sp_mamba_bi(re_order_mamba_sp) # torch.Size([192, 168, 768])
+            # # mamba_sp_out = mamba_sp_out.reshape(B, self.h_resolution * self.w_resolution, D).contiguous()
+            # mamba_sp_out = torch.cat((feats_for_mamba_cls.unsqueeze(1), mamba_sp_out), # torch.Size([192, 169, 768])
+            #                          dim=1)
+            # mamba_sp_out2 = self.norm2_mamba(mamba_sp_out) # torch.Size([192, 169, 768])
+            #
+            # A = self.sp_attention(mamba_sp_out2) # torch.Size([192, 169, 1])
+            # A = torch.transpose(A, 1, 2)  # torch.Size([192, 1, 169]) 转置操作：[B, n, K] ---> [B, K, n]
+            # A = F.softmax(A, dim=-1) # torch.Size([192, 1, 169])
+            # mamba_sp_out2 = torch.bmm(A, mamba_sp_out2)  # torch.Size([192, 1, 768]) torch.bmm 批量矩阵乘法函数
+            # mamba_sp_out2 = mamba_sp_out2.squeeze(1) # torch.Size([192, 768])
+            #
+            # feat_sp = self.bottleneck_proj_sp(mamba_sp_out2) # torch.Size([192, 768])
+            # feat_sp = self.tem_pool(feat_sp)    #  32 768
+            # cls_scores_mamba, _ = self.classifier3(feat_sp)
+            #
+            # # print('-----------------------测试结束-----------------------')
+            #
+            # # exit()
 
-            cls_scores, _ = self.classifier(img_feature)
-            cls_scores_proj, _ = self.classifier_proj(img_feature_proj)
+            img_feature_last = image_features_last[:,0] # torch.Size([192, 768])
+            img_feature = image_features[:,0] # Info torch.Size([192, 768])
 
-            cls_scores_stp, _ = self.classifier_STP(image_features_stp)
-            cls_scores_proj_stp, _ = self.classifier_proj_STP(image_features_proj_stp)
+            img_feature_proj = image_features_proj[:,0] # torch.Size([192, 169, 512])
+            image_features_stp, image_features_proj_stp = image_features_stp[:,0], image_features_proj_stp[:,0] # torch.Size([192, 768]) torch.Size([192, 512])
+
+            img_feature_last = self.tem_pool(img_feature_last) # torch.Size([32, 768])
+            img_feature = self.tem_pool(img_feature) # torch.Size([32, 768])
+            img_feature_proj = self.tem_pool(img_feature_proj) # torch.Size([32, 512])
+
+            image_features_stp = self.tem_pool(image_features_stp) # torch.Size([32, 768])
+            image_features_proj_stp = self.tem_pool(image_features_proj_stp) # torch.Size([32, 512])
+
+            # img_feature = img_feature + 0.2 * feat_sp # feat_sp 乘上不同的系数
+            # img_feature = img_feature + feat_sp # feat_sp 乘上不同的系数
+
+            cls_scores, _ = self.classifier(img_feature) # torch.Size([32, 1074])
+            cls_scores_proj, _ = self.classifier_proj(img_feature_proj) # torch.Size([32, 1074])
+
+            cls_scores_stp, _ = self.classifier_STP(image_features_stp) # torch.Size([32, 1074])
+            cls_scores_proj_stp, _ = self.classifier_proj_STP(image_features_proj_stp) # torch.Size([32, 1074])
 
             if self.use_text_prompt_learning:
                 prompts = self.prompt_learner()
@@ -243,6 +357,7 @@ class Model(nn.Module):
 
                 logits = img_feature_proj @ text_features.t()
                 logits_stp = image_features_proj_stp@text_features.t()
+            # return [img_feature_last,img_feature,img_feature_proj,image_features_stp, feat_sp], [cls_scores, cls_scores_proj,logits,cls_scores_stp,logits_stp, cls_scores_mamba]
             return [img_feature_last,img_feature,img_feature_proj,image_features_stp], [cls_scores, cls_scores_proj,logits,cls_scores_stp,logits_stp]
 
         else:
@@ -297,11 +412,17 @@ class Classifier2(nn.Module):
         return cls_score, self.l2_norm(features)
 
 
-from .clip import clip
+from network.clip import clip
 def load_clip_to_cpu(backbone_name, h_resolution, w_resolution, vision_stride_size):
-    url = clip._MODELS[backbone_name]
-    model_path = clip._download(url)
+    # backbone_name = 'ViT-B/16'
+    # url = clip._MODELS[backbone_name]
+    # model_path = clip._download(url)
 
+    # A800
+    model_path = '/mnt/cache/wujiahua/Workspace_2/network/clip/ViT-B-16.pt'
+
+    # # A600
+    # model_path = '/data/Zhongping/tempmodel/network/clip/ViT-B-16.pt'
     try:
         model = torch.jit.load(model_path, map_location="cpu").eval()
         state_dict = None

@@ -2,7 +2,7 @@ import os
 import torch
 import torch.nn as nn
 from network import  Classifier,Model
-from tools import os_walk, TripletLoss_WRT,SupConLoss
+from tools import os_walk, TripletLoss_WRT,SupConLoss, TripletLoss
 from network.scheduler import CosineLRScheduler
 
 class Base:
@@ -32,7 +32,9 @@ class Base:
         self._init_optimizer()
 
     def _init_device(self):
-        self.device = torch.device('cuda')
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
+        # self.device = torch.device('cuda')
 
     def _init_model(self):
         self.model = Model(self.config,self.pid_num, self.img_h, self.img_w)
@@ -43,6 +45,9 @@ class Base:
         self.pid_creiteron = nn.CrossEntropyLoss()
         self.tri_creiteron = TripletLoss_WRT()
         self.con_creiteron = SupConLoss(self.device)
+
+        # # 添加
+        # self.tri_loss = TripletLoss()
 
     def _init_optimizer(self):
         params = []
@@ -98,7 +103,7 @@ class Base:
 
     def resume_model(self, resume_path):
         model_path = os.path.join(resume_path, 'best_model.pth')
-        self.model.load_state_dict(torch.load(model_path), strict=False)
+        self.model.load_state_dict(torch.load(model_path, map_location=self.device), strict=False)
         print('Successfully resume shared_model from {}'.format(model_path))
 
 
